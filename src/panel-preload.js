@@ -14,7 +14,8 @@ const con = {
     error: console.error
 }
 console.log = (...e) => { e.forEach((c) => { ipc.send('log', c); con.log(c) }) }
-console.error = (...e) => { e.forEach((c) => { ipc.send('log', c); con.error(c) }) }
+console.error = (...e) => { e.forEach((c) => { ipc.send('log', (c instanceof Error ? (c.stack || c.message) : c)); con.error(c) }) }
+window.addEventListener("error", (e) => { ipc.send('log', "[Panel error] " + (e.error?.stack || e.message)) })
 
 window.winPosition = { x: 0, y: 0, width: 0, height: 0 }
 
@@ -268,6 +269,13 @@ ipc.on('settings-updated', (event, settings) => {
     detectSunValley()
     window.dispatchEvent(new CustomEvent('settingsUpdated', {
         detail: settings
+    }))
+})
+
+// Displays Twinkle Tray turned off and disconnected from Windows
+ipc.on("disconnected-displays", (event, list) => {
+    window.dispatchEvent(new CustomEvent("disconnectedDisplays", {
+        detail: list
     }))
 })
 

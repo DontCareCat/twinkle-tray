@@ -79,8 +79,9 @@ const monitorRules = require('./monitor-rules.json')
 const knownDDCBrightnessVCPs = monitorRules?.ddcBrightnessCodes
 
 const { fork, exec } = require('child_process');
-const { VerticalRefreshRateContext, addDisplayChangeListener } = require("win32-displayconfig");
+const { VerticalRefreshRateContext, addDisplayChangeListener, extractDisplayConfig, toggleEnabledDisplays, displayConfigForRestoration, restoreDisplayConfig } = require("win32-displayconfig");
 const refreshCtx = new VerticalRefreshRateContext();
+const { DisplayLink } = require("./display-link");
 
 const {WindowUtils, BrightnessKeys, MediaStatus, PowerEvents, AppStartup, DisplayBrightness} = require("tt-windows-utils")
 const setWindowPos = () => { }
@@ -992,6 +993,7 @@ const defaultSettings = {
   lastDetectedDDCCIMethod: "none",
   forceLowPowerGPU: false,
   ddcPowerOffValue: 5,
+  disconnectOnPowerOff: false,
   disableAutoRefresh: false,
   disableAutoApply: false,
   disableOnLockScreen: false,
@@ -3762,6 +3764,108 @@ async function turnOffDisplayDDC(hwid, toggle = false) {
   }
 }
 
+//
+//    Disconnect displays from Windows while Twinkle Tray has them turned off
+//
+
+const disconnectedDisplaysPath = path.join(app.getPath("userData"), `disconnected-displays${isDev ? "-dev" : ""}.json`)
+
+const displayLink = new DisplayLink({
+  getLayout: displayConfigForRestoration,
+  applyLayout: restoreDisplayConfig,
+  getDisplayConfig: extractDisplayConfig,
+  toggleDisplays: toggleEnabledDisplays,
+  // Same as Win+P > Extend
+  extendAll: () => new Promise(resolve => exec(`"${path.join(process.env.SystemRoot || "C:\\Windows", "System32", "DisplaySwitch.exe")}" /extend`, () => resolve())),
+  log: (...args) => console.log(...args),
+  onChange: (list) => {
+    try {
+      fs.writeFileSync(disconnectedDisplaysPath, JSON.stringify(Array.from(displayLink.disconnected.values())))
+    } catch (e) {
+      console.log("Couldn't save disconnected displays", e)
+    }
+    setTrayMenu()
+    sendToAllWindows('disconnected-displays', list)
+  }
+})
+
+async function restoreDisconnectedDisplays() {
+  try {
+    if (!fs.existsSync(disconnectedDisplaysPath)) return
+    await displayLink.restore(JSON.parse(fs.readFileSync(disconnectedDisplaysPath)))
+    if (displayLink.disconnected.size) {
+      setTrayMenu()
+      sendToAllWindows('disconnected-displays', displayLink.list())
+    }
+  } catch (e) {
+    console.log("Couldn't restore disconnected displays", e)
+  }
+}
+
+// The power button on a display in the panel
+async function toggleDisplayPower(hwid) {
+  console.log(`[DisplayLink] Power button: ${hwid} (disconnect ${settings.disconnectOnPowerOff ? "on" : "off"})`)
+  if (!settings.disconnectOnPowerOff) return turnOffDisplayDDC(hwid, true)
+  const monitor = Object.values(monitors).find(m => m?.hwid?.join("#") === hwid)
+  if (!monitor) {
+    console.log("[DisplayLink] Display not found, only toggling power")
+    return turnOffDisplayDDC(hwid, true)
+  }
+
+  const currentValue = await getVCP(hwid, 0xD6)
+  console.log(`[DisplayLink] Current power state: ${currentValue}`)
+  if (currentValue > 1) {
+    // Off but still part of the desktop: turn it on as usual
+    return turnOffDisplayDDC(hwid, true)
+  }
+
+  await turnOffDisplayDDC(hwid)
+  // Let the power-off command reach the display before Windows stops talking to it
+  await Utils.wait(1500)
+  try {
+    await displayLink.disconnect(monitor)
+  } catch (e) {
+    console.log("[DisplayLink] Couldn't disconnect display", e)
+  }
+}
+
+async function turnOnDisconnectedDisplay(key) {
+  let entry
+  try {
+    entry = await displayLink.connect(key)
+  } catch (e) {
+    console.log("[DisplayLink] Couldn't reconnect display", e)
+    return false
+  }
+  if (!entry) return false
+
+  // Many displays wake up once they get a signal again. For the rest, wait
+  // until Windows lists the display again so DDC/CI can reach it, then send "on".
+  const hwid = entry.hwid.join("#")
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await Utils.wait(2000)
+    if (!Object.values(monitors).some(m => m?.hwid?.join("#") === hwid)) {
+      if (attempt >= 2) await refreshMonitors(true, true);
+      continue
+    }
+    const value = await getVCP(hwid, 0xD6)
+    if (value === 1) return true
+    await waitForMonitorWorkerIdle()
+    monitorsThread.send({ type: "vcp", monitor: hwid, code: 0xD6, value: 1 })
+  }
+  return true
+}
+
+function getDisconnectedDisplaysMenuItems() {
+  const list = displayLink.list()
+  if (!list.length) return [{ label: "", visible: false }]
+  return list.map(entry => ({
+    label: T.t("GENERIC_TURN_ON_DISPLAY", settings.names?.[entry.id] || entry.name || entry.key),
+    type: 'normal',
+    click: () => turnOnDisconnectedDisplay(entry.key)
+  })).concat([{ type: 'separator' }])
+}
+
 
 
 
@@ -3880,7 +3984,9 @@ ipcMain.on('show-acrylic', () => {
 ipcMain.on('apply-last-known-monitors', () => { setKnownBrightness() })
 
 ipcMain.on('sleep-displays', () => sleepDisplays(settings.sleepAction, 1000))
-ipcMain.on('sleep-display', (e, hwid) => turnOffDisplayDDC(hwid, true))
+ipcMain.on('sleep-display', (e, hwid) => toggleDisplayPower(hwid))
+ipcMain.on('turn-on-disconnected-display', (e, key) => turnOnDisconnectedDisplay(key))
+ipcMain.on('request-disconnected-displays', () => sendToAllWindows('disconnected-displays', displayLink.list()))
 ipcMain.on('set-volume', (e, values) => {
   if (!Number.isInteger(values.value) || values.value < 0 || values.value > 0xFFFF) return
   setRecentlyInteracted(true)
@@ -4809,6 +4915,7 @@ function setTrayMenu() {
   if (tray === null) return false;
 
   const contextMenu = Menu.buildFromTemplate([
+    ...getDisconnectedDisplaysMenuItems(),
     getTimeAdjustmentsMenuItem(),
     getDetectIdleMenuItem(),
     getProfilesMenuItem(),
@@ -5450,7 +5557,12 @@ function addEventListeners() {
   systemPreferences.on('color-changed', () => { if(!settings.disableThemeChanges) handleAccentChange(); })
   nativeTheme.on('updated', () => { if(!settings.disableThemeChanges) handleAccentChange(); })
 
-  addDisplayChangeListener(() => { if(settings.useWin32Event) handleMonitorChange("win32") })
+  addDisplayChangeListener(() => {
+    // Forget displays Windows reattached on its own (Win+P, replugging)
+    if (!displayLink.busy) displayLink.prune();
+    if(settings.useWin32Event) handleMonitorChange("win32")
+  })
+  restoreDisconnectedDisplays()
   screen.addListener("display-added", () => { if(settings.useElectronEvents) handleMonitorChange("display-added") })
   screen.addListener("display-removed", () => { if(settings.useElectronEvents) handleMonitorChange("display-removed") })
   screen.addListener("display-metrics-changed", () => { if(settings.useElectronEvents) handleMetricsChange("display-metrics-changed") })

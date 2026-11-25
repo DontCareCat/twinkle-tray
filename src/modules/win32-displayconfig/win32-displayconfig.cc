@@ -333,18 +333,33 @@ LONG ToggleEnabled(const std::shared_ptr<struct Win32DeviceConfigToggleEnabled> 
         }
     }
 
+    // Sources that already drive an active display. Reusing one would make the
+    // newly enabled display a clone of that display, which fails (error 31)
+    // when the two can't share a mode. Pick a path with a free source instead.
+    std::vector<struct Win32TransientDeviceId> usedSources;
+    for (auto it = preserve.begin(); it != preserve.end(); it++) {
+        struct Win32TransientDeviceId sourceId;
+        sourceId.adapterId = it->sourceInfo.adapterId;
+        sourceId.id = it->sourceInfo.id;
+        usedSources.push_back(sourceId);
+    }
+
     // Then, enable the devices we wanted to enable but haven't yet
     for (auto it = initialQueryResults->rgPathInfo.begin(); it != initialQueryResults->rgPathInfo.end(); it++) {
         currentPathDeviceId.adapterId.LowPart = it->targetInfo.adapterId.LowPart;
         currentPathDeviceId.adapterId.HighPart = it->targetInfo.adapterId.HighPart;
         currentPathDeviceId.id = it->targetInfo.id;
 
-        if (it->sourceInfo.modeInfoIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID) {
+        struct Win32TransientDeviceId sourceId;
+        sourceId.adapterId = it->sourceInfo.adapterId;
+        sourceId.id = it->sourceInfo.id;
+        if (TransientDeviceIdVectorContains(usedSources, sourceId)) {
             continue;
         }
 
         if (TransientDeviceIdVectorContains(args->enable, currentPathDeviceId) &&
             !TransientDeviceIdVectorContains(alreadyEnabled, currentPathDeviceId)) {
+            usedSources.push_back(sourceId);
             auto copied = *it;
             copied.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
             copied.sourceInfo.statusFlags = 0;

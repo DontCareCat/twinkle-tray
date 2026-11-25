@@ -23,6 +23,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [doBackgroundEvent, setDoBackgroundEvent] = useState(false)
   const [levelsChanged, setLevelsChanged] = useState(false)
   const [init, setInit] = useState(false)
+  // Displays Twinkle Tray turned off and disconnected from Windows
+  const [disconnectedDisplays, setDisconnectedDisplays] = useState([])
   // Monitors whose level the user changed since the last send. Only these are
   // sent, so opening the panel never writes old values back to every monitor.
   const changedMonitors = useRef(new Set())
@@ -218,7 +220,9 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     const handleSleepUpdated = (e) => recievedSleep(e)
     const handleSlidersLockedUpdated = (e) => handleSlidersLockedUpdate(e)
     const handleProgressUpdated = (e) => handleUpdateProgress(e)
+    const handleDisconnectedDisplays = (e) => setDisconnectedDisplays(Array.isArray(e.detail) ? e.detail : [])
 
+    window.addEventListener("disconnectedDisplays", handleDisconnectedDisplays)
     window.addEventListener("monitorsUpdated", handleMonitorsUpdated)
     window.addEventListener("settingsUpdated", handleSettingsUpdated)
     window.addEventListener("localizationUpdated", handleLocalizationUpdated)
@@ -238,9 +242,11 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.requestSettings()
     window.requestMonitors()
     window.ipc.send('request-localization')
+    window.ipc.send('request-disconnected-displays')
     window.reactReady = true
 
     return () => {
+      window.removeEventListener("disconnectedDisplays", handleDisconnectedDisplays)
       window.removeEventListener("monitorsUpdated", handleMonitorsUpdated)
       window.removeEventListener("settingsUpdated", handleSettingsUpdated)
       window.removeEventListener("localizationUpdated", handleLocalizationUpdated)
@@ -342,12 +348,15 @@ const BrightnessPanel = memo(function BrightnessPanel() {
               }
               const powerOff = () => {
                 window.ipc.send("sleep-display", monitor.hwid.join("#"))
-                monitor.features["0xD6"][0] = (monitor.features["0xD6"][0] >= 4 ? 1 : settings.ddcPowerOffValue)
+                // The value isn't known yet for a custom feature the display didn't report
+                if (Array.isArray(monitor.features?.["0xD6"])) {
+                  monitor.features["0xD6"][0] = (monitor.features["0xD6"][0] >= 4 ? 1 : settings.ddcPowerOffValue)
+                }
               }
               const showPowerButton = () => {
                 const customFeatureEnabled = window.settings?.monitorFeaturesSettings?.[monitor?.hwid[1]]?.["0xD6"]
                 if (monitorFeatures?.["0xD6"] && (monitor.features?.["0xD6"] || customFeatureEnabled)) {
-                  return (<div className="feature-power-icon simple" onClick={powerOff}><span className="icon vfix">&#xE7E8;</span><span>{(monitor.features?.["0xD6"][0] >= 4 ? T.t("PANEL_LABEL_TURN_ON") : T.t("PANEL_LABEL_TURN_OFF"))}</span></div>)
+                  return (<div className="feature-power-icon simple" onClick={powerOff}><span className="icon vfix">&#xE7E8;</span><span>{(monitor.features?.["0xD6"]?.[0] >= 4 ? T.t("PANEL_LABEL_TURN_ON") : T.t("PANEL_LABEL_TURN_OFF"))}</span></div>)
                 }
               }
 
@@ -432,6 +441,17 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         </div>
       </div>
       {state.sleeping ? (<div></div>) : getMonitors()}
+      {state.sleeping ? null : disconnectedDisplays.map(display => (
+        <div className="monitor-sliders extended" key={`disconnected-${display.key}`}>
+          <div className="monitor-item" style={{ height: "auto", paddingBottom: "18px" }}>
+            <div className="name-row">
+              <div className="icon"><span>&#xE7F4;</span></div>
+              <div className="title">{getMonitorName({ id: display.id, name: display.name || display.key }, state.names || {})}</div>
+              <div className="feature-power-icon simple" onClick={() => window.ipc.send("turn-on-disconnected-display", display.key)}><span className="icon vfix">&#xE7E8;</span><span>{T.t("PANEL_LABEL_TURN_ON")}</span></div>
+            </div>
+          </div>
+        </div>
+      ))}
       {
         (state.update && state.update.show)
           ?
