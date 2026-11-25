@@ -1824,7 +1824,7 @@ async function checkVCPIfEnabled(monitor, code, setting, skipCache = false) {
         const isInReport = monitorReports[monitor]?.[vcpString] ? true : false
         const hasReport = monitorReports[monitor] && Object.keys(monitorReports[monitor])?.length > 0 ? true : false
         
-        if (hasReport && !isInReport) return false;
+        if (hasReport && !isInReport && !userEnabledFeature) return false; // Some displays (BenQ EX2710Q) answer codes their capabilities report leaves out, so still try ones the user turned on
 
         // If we previously saw that a feature was supported, we shouldn't have to check again.
         if ((!skipCache || !userEnabledFeature) && vcpCache[monitor] && vcpCache[monitor]["vcp_" + vcpString]) return vcpCache[monitor]["vcp_" + vcpString];

@@ -1599,6 +1599,7 @@ export default class SettingsWindow extends PureComponent {
                                     }>
                                         <SettingsChild description={<>⚠️ <em>{T.t("SETTINGS_FEATURES_POWER_WARNING")}</em></>} />
                                     </SettingsOption>
+                                    <SettingsOption title={T.t("SETTINGS_FEATURES_POWER_DISCONNECT_TITLE")} description={T.t("SETTINGS_FEATURES_POWER_DISCONNECT_DESC")} input={this.renderToggle("disconnectOnPowerOff")} />
                                     <SettingsOption title={T.t("SETTINGS_FEATURES_DDC_BLOCK_TITLE")} description={T.t("SETTINGS_FEATURES_DDC_BLOCK_DESC")} expandable={true}>
                                         {this.getDDCBlockedMonitors()}
                                     </SettingsOption>

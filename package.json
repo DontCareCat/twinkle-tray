@@ -5,6 +5,7 @@
   "main": "src/electron.js",
   "scripts": {
     "start": "electron . --dev",
+    "test": "node --test \"tests/**/*.test.cjs\"",
     "parcel": "node src/parcel.js --mode dev",
     "parcel-build": "node src/parcel.js --mode build",
     "clean": "npm ci",
@@ -77,6 +78,7 @@
       "src/wmi-bridge-test.js",
       "src/vcp-codes.js",
       "src/volume-utils.js",
+      "src/display-link.js",
       "src/assets/tray-icons/dark/*.ico",
       "src/assets/tray-icons/light/*.ico",
       "src/light-sensor/*",
